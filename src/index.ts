@@ -8,13 +8,10 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// --- 1. DEFINIÇÃO DO BANCO DE DADOS (MONGOOSE) ---
-
-// Interface TypeScript para garantir tipagem
+// --- INTERFACES ---
 interface IDisco {
   Letra: string;
   Tipo: string;
@@ -25,16 +22,18 @@ interface IDisco {
 
 interface IComputador extends Document {
   Hostname: string;
+  IpAddress: string;     // <--- NOVO: Tipo na Interface
   MacAddress: string;
   Laboratorio: string;
   Discos: IDisco[];
   UltimaAtualizacao: Date;
 }
 
-// Schema do MongoDB
+// --- SCHEMA ---
 const ComputadorSchema = new Schema({
-  Hostname: { type: String, required: true, unique: true }, // Hostname é a chave única
-  MacAddress: { type: String, required: true },
+  Hostname: { type: String, required: true, unique: true },
+  IpAddress: { type: String },    // <--- NOVO: Campo no Banco
+  MacAddress: { type: String },
   Laboratorio: { type: String, required: true },
   Discos: [
     {
@@ -48,48 +47,39 @@ const ComputadorSchema = new Schema({
   UltimaAtualizacao: { type: Date, default: Date.now }
 });
 
-// Modelo
 const Computador = mongoose.model<IComputador>('Computador', ComputadorSchema);
 
-// --- 2. CONEXÃO COM O MONGODB ---
+// --- CONEXÃO ---
 const connectDB = async () => {
+  if (mongoose.connection.readyState >= 1) return;
+  if (!process.env.MONGO_URI) return;
   try {
-    if (!process.env.MONGO_URI) {
-      throw new Error("MONGO_URI não definida no .env");
-    }
     await mongoose.connect(process.env.MONGO_URI);
-    console.log('📦 MongoDB Conectado!');
+    console.log("📦 MongoDB Conectado");
   } catch (error) {
-    console.error('Erro ao conectar no MongoDB:', error);
-    process.exit(1);
+    console.error("Erro Conexão:", error);
   }
 };
 
-// --- 3. ROTAS ---
+// --- ROTA ---
+app.get('/', (req, res) => { res.send('API Online'); });
 
-// Rota de teste
-app.get('/', (req: Request, res: Response) => {
-  res.send('API de Inventário de TI está online! 🚀');
-});
-
-// Rota principal que recebe o POST do PowerShell
 app.post('/api/inventario', async (req: Request, res: Response) => {
   await connectDB();
 
   try {
-    const { Hostname, MacAddress, Laboratorio, Discos } = req.body;
+    // 1. Recebe o IpAddress do corpo da requisição
+    const { Hostname, IpAddress, MacAddress, Laboratorio, Discos } = req.body;
 
-    if (!Hostname) {
-      return res.status(400).json({ erro: 'Hostname é obrigatório.' });
-    }
+    if (!Hostname) return res.status(400).json({ erro: 'Hostname obrigatório.' });
 
-    // --- AJUSTE DE FUSO HORÁRIO (-3 BRASIL) ---
+    // Ajuste Timezone Brasil (-3h)
     const dataBrasil = new Date();
     dataBrasil.setHours(dataBrasil.getHours() - 3);
-    // ------------------------------------------
 
     const dadosAtualizados = {
       Hostname,
+      IpAddress,     // <--- NOVO: Salva no objeto
       MacAddress,
       Laboratorio,
       Discos,
@@ -102,27 +92,21 @@ app.post('/api/inventario', async (req: Request, res: Response) => {
       { new: true, upsert: true }
     );
 
-    console.log(`📥 Dados recebidos de: ${Hostname} (${Laboratorio}) às ${dataBrasil.toISOString()}`);
+    console.log(`📥 Recebido: ${Hostname} [${IpAddress}] - ${Laboratorio}`);
     
-    return res.status(200).json({ 
-      sucesso: true, 
-      mensagem: 'Inventário processado.',
-      id: resultado._id 
-    });
+    return res.status(200).json({ sucesso: true, id: resultado._id });
 
   } catch (error) {
-    console.error('Erro ao processar requisição:', error);
-    return res.status(500).json({ erro: 'Erro interno no servidor.' });
+    console.error(error);
+    return res.status(500).json({ erro: 'Erro no servidor' });
   }
 });
 
-// Inicialização (Apenas se não for Vercel, o Vercel exporta o app)
+// Inicialização
 if (require.main === module) {
-    connectDB().then(() => {
-        app.listen(PORT, () => {
-        console.log(`🔥 Servidor rodando na porta ${PORT}`);
-        });
-    });
+  connectDB().then(() => {
+    app.listen(PORT, () => console.log(`🚀 Porta ${PORT}`));
+  });
 }
 
 export default app;
