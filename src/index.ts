@@ -74,35 +74,45 @@ app.get('/', (req: Request, res: Response) => {
 
 // Rota principal que recebe o POST do PowerShell
 app.post('/api/inventario', async (req: Request, res: Response) => {
+  await connectDB();
+
   try {
     const { Hostname, MacAddress, Laboratorio, Discos } = req.body;
 
-    // Validação básica
-    if (!Hostname || !Discos) {
-      return res.status(400).json({ erro: 'Hostname e Discos são obrigatórios.' });
+    if (!Hostname) {
+      return res.status(400).json({ erro: 'Hostname é obrigatório.' });
     }
 
-    // Lógica de UPSERT (Update or Insert)
-    // Procura pelo Hostname. Se achar, atualiza. Se não achar, cria novo.
-    const filtro = { Hostname: Hostname };
+    // --- AJUSTE DE FUSO HORÁRIO (-3 BRASIL) ---
+    const dataBrasil = new Date();
+    dataBrasil.setHours(dataBrasil.getHours() - 3);
+    // ------------------------------------------
+
     const dadosAtualizados = {
+      Hostname,
       MacAddress,
       Laboratorio,
       Discos,
-      UltimaAtualizacao: new Date()
+      UltimaAtualizacao: dataBrasil
     };
 
-    const resultado = await Computador.findOneAndUpdate(filtro, dadosAtualizados, {
-      new: true,   // Retorna o dado novo
-      upsert: true // Cria se não existir
+    const resultado = await Computador.findOneAndUpdate(
+      { Hostname: Hostname },
+      dadosAtualizados,
+      { new: true, upsert: true }
+    );
+
+    console.log(`📥 Dados recebidos de: ${Hostname} (${Laboratorio}) às ${dataBrasil.toISOString()}`);
+    
+    return res.status(200).json({ 
+      sucesso: true, 
+      mensagem: 'Inventário processado.',
+      id: resultado._id 
     });
 
-    console.log(`✅ Dados recebidos e atualizados: ${Hostname}`);
-    return res.status(200).json({ mensagem: 'Sucesso', dados: resultado });
-
   } catch (error) {
-    console.error('Erro ao salvar:', error);
-    return res.status(500).json({ erro: 'Erro interno do servidor' });
+    console.error('Erro ao processar requisição:', error);
+    return res.status(500).json({ erro: 'Erro interno no servidor.' });
   }
 });
 
