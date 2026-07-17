@@ -171,16 +171,28 @@ const Computador = mongoose.model<IComputador>('Computador', ComputadorSchema);
 const connectDB = async () => {
   if (mongoose.connection.readyState >= 1) return;
   if (!process.env.MONGO_URI) {
-    console.error('FATAL: MONGO_URI nao definida');
-    return;
+    throw new Error('MONGO_URI nao definida');
   }
   try {
-    await mongoose.connect(process.env.MONGO_URI);
+    await mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 8000 });
     console.log('MongoDB conectado');
-  } catch (error) {
-    console.error('Erro de conexao com o banco');
+  } catch (error: any) {
+    console.error('Erro de conexao com o banco:', error?.message || 'desconhecido');
+    throw error;
   }
 };
+
+// Middleware: garante conexao com o banco antes da rota, e diferencia
+// "banco fora do ar" (503) de erro de aplicacao (500) nos logs/resposta.
+async function requireDB(_req: Request, res: Response, next: NextFunction) {
+  try {
+    await connectDB();
+    next();
+  } catch (error: any) {
+    console.error('DB indisponivel:', error?.message || 'desconhecido');
+    return res.status(503).json({ erro: 'Banco de dados indisponivel' });
+  }
+}
 
 // --- ROTAS ---
 app.get('/', (_req, res) => {
@@ -193,8 +205,7 @@ app.get('/health', (_req, res) => {
 });
 
 // POST inventario - estacoes mandam dados aqui
-app.post('/api/inventario', limiterEscrita, exigirApiKey, async (req: Request, res: Response) => {
-  await connectDB();
+app.post('/api/inventario', limiterEscrita, exigirApiKey, requireDB, async (req: Request, res: Response) => {
   try {
     const body = req.body || {};
 
@@ -266,8 +277,7 @@ app.post('/api/inventario', limiterEscrita, exigirApiKey, async (req: Request, r
 });
 
 // GET inventario - listar maquinas (com filtro opcional por lab)
-app.get('/api/inventario', limiterLeitura, exigirApiKey, async (req: Request, res: Response) => {
-  await connectDB();
+app.get('/api/inventario', limiterLeitura, exigirApiKey, requireDB, async (req: Request, res: Response) => {
   try {
     const filter: any = {};
     if (typeof req.query.laboratorio === 'string') {
@@ -293,8 +303,7 @@ function classificarSO(s: any): 'w10' | 'w11' | 'outro' {
 }
 
 // GET excel - baixa um xlsx ja formatado
-app.get('/api/inventario/excel', limiterLeitura, exigirApiKey, async (_req: Request, res: Response) => {
-  await connectDB();
+app.get('/api/inventario/excel', limiterLeitura, exigirApiKey, requireDB, async (_req: Request, res: Response) => {
   try {
     const docs = await Computador.find({}).lean();
 
@@ -444,8 +453,12 @@ app.get('/api/inventario/excel', limiterLeitura, exigirApiKey, async (_req: Requ
 app.use((_req, res) => res.status(404).json({ erro: 'Rota nao encontrada' }));
 
 // Inicializacao
+// Sobe o servidor mesmo se o banco estiver fora do ar no boot; requireDB
+// tenta reconectar a cada requisicao e devolve 503 enquanto isso.
 if (require.main === module) {
-  connectDB().then(() => {
+  connectDB().catch((error: any) => {
+    console.error('Nao foi possivel conectar ao banco no boot:', error?.message || 'desconhecido');
+  }).finally(() => {
     app.listen(PORT, () => console.log(`API rodando na porta ${PORT}`));
   });
 }
